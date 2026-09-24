@@ -1,5 +1,46 @@
 const progressBar = document.querySelector(".reading-progress span");
 const backToTop = document.querySelector(".back-to-top");
+const operationSearch = document.querySelector("#operation-search");
+const operationPanel = document.querySelector("#operation-panel");
+const operationResults = document.querySelector("#operation-results");
+const operationCollapse = document.querySelector("#operation-collapse");
+const operationToggle = document.querySelector("#operation-toggle");
+const operationData = JSON.parse(document.querySelector("#operation-data")?.textContent ?? "[]");
+
+const setOperationPanelOpen = (isOpen) => {
+  operationPanel?.classList.toggle("is-open", isOpen);
+  if (operationCollapse) {
+    operationCollapse.textContent = isOpen ? "−" : "+";
+    operationCollapse.setAttribute("aria-label", isOpen ? "折叠操作引导" : "展开操作引导");
+  }
+  if (operationToggle) {
+    operationToggle.textContent = isOpen ? "收起" : "展开";
+    operationToggle.setAttribute("aria-expanded", String(isOpen));
+  }
+};
+
+const renderOperationResults = (query) => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    operationResults.innerHTML = "<p class=\"operation-hint\">输入关键词查找操作步骤。</p>";
+    setOperationPanelOpen(false);
+    return;
+  }
+
+  const results = operationData.filter(({ searchText }) => searchText.includes(normalizedQuery));
+  setOperationPanelOpen(true);
+  operationResults.innerHTML = results.length
+    ? results.map(({ title, html }) => `<article class=\"operation-result\"><h2>${title}</h2>${html}</article>`).join("")
+    : "<p class=\"operation-hint\">没有找到相关操作。</p>";
+};
+
+operationSearch?.addEventListener("input", (event) => renderOperationResults(event.target.value));
+operationCollapse?.addEventListener("click", () => {
+  setOperationPanelOpen(!operationPanel.classList.contains("is-open"));
+});
+operationToggle?.addEventListener("click", () => {
+  setOperationPanelOpen(!operationPanel.classList.contains("is-open"));
+});
 
 const updateScrollUi = () => {
   const scrollableHeight = document.documentElement.scrollHeight - window.innerHeight;

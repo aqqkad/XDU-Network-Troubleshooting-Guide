@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import MarkdownIt from "markdown-it";
@@ -9,6 +9,8 @@ const rootDirectory = path.resolve(scriptDirectory, "..");
 const sourcePath = path.join(rootDirectory, "校园网排障指南.md");
 const outputDirectory = path.join(rootDirectory, "dist");
 const assetsDirectory = path.join(outputDirectory, "assets");
+const operationContentDirectory = path.join(rootDirectory, "操作内容");
+const operationAssetsDirectory = path.join(outputDirectory, "operation-assets");
 
 const escapeHtml = (value) =>
   value
@@ -64,6 +66,18 @@ markdown.renderer.rules.code_inline = (tokens, index, options, environment, self
 markdown.renderer.rules.table_open = () => '<div class="table-scroll" tabindex="0"><table>\n';
 markdown.renderer.rules.table_close = () => "</table></div>\n";
 
+const defaultImage = markdown.renderer.rules.image;
+markdown.renderer.rules.image = (tokens, index, options, environment, self) => {
+  const token = tokens[index];
+  const source = token.attrGet("src") ?? "";
+  token.attrSet("loading", "lazy");
+  token.attrSet("decoding", "async");
+  const imageHtml = defaultImage
+    ? defaultImage(tokens, index, options, environment, self)
+    : self.renderToken(tokens, index, options);
+  return `<a class="operation-image-link" href="${escapeHtml(source)}" target="_blank" rel="noopener noreferrer">${imageHtml}</a>`;
+};
+
 const tokens = markdown.parse(bodySource, {});
 const headings = [];
 const usedSlugs = new Map();
@@ -100,6 +114,34 @@ markdown.renderer.rules.heading_close = (renderTokens, index, options, environme
 const articleHtml = markdown.renderer.render(tokens, markdown.options, {});
 const tableOfContents = headings.filter(({ level }) => level === 2 || level === 3);
 const commonLinksId = headings.find(({ level, label }) => level === 2 && label.includes("常用入口"))?.id ?? "top";
+
+const operationFileNames = (await readdir(operationContentDirectory))
+  .filter((fileName) => fileName.toLowerCase().endsWith(".md"))
+  .sort((left, right) => left.localeCompare(right, "zh-CN"));
+
+const operationData = await Promise.all(operationFileNames.map(async (fileName) => {
+  const operationSource = await readFile(path.join(operationContentDirectory, fileName), "utf8");
+  const operationTitle = operationSource.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? path.basename(fileName, ".md");
+  const operationBody = operationSource.replace(/^#\s+.+(?:\r?\n)+/, "").trim();
+  const operationBodyWithAssetPaths = operationBody.replaceAll(
+    /!\[([^\]]*)\]\(([^)]+)\)/g,
+    (_, alt, src) => `![${alt}](/operation-assets/${encodeURIComponent(path.basename(src))})`
+  );
+  const operationTokens = markdown.parse(operationBodyWithAssetPaths, {});
+  const searchText = operationTokens
+    .filter((token) => token.type === "inline")
+    .map((token) => token.content)
+    .join(" ");
+
+  return {
+    id: `operation-${slugify(operationTitle)}`,
+    title: operationTitle,
+    searchText: `${operationTitle} ${searchText}`.toLowerCase(),
+    html: markdown.renderer.render(operationTokens, markdown.options, {})
+  };
+}));
+
+const operationDataJson = JSON.stringify(operationData).replaceAll("</", "<\\/");
 
 const tocHtml = tableOfContents
   .map(({ level, label, id }) => {
@@ -164,21 +206,45 @@ const html = `<!doctype html>
     </div>
   </main>
 
+  <aside class="operation-dock" aria-label="操作引导搜索">
+    <div class="operation-search-box">
+      <div class="operation-search-heading">
+        <label for="operation-search">操作搜索</label>
+        <button id="operation-toggle" type="button" aria-expanded="false">展开</button>
+      </div>
+      <input id="operation-search" type="search" placeholder="例如：DNS、PPPoE" autocomplete="off">
+    </div>
+    <section class="operation-panel" id="operation-panel">
+      <header class="operation-panel-header">
+        <strong>操作引导</strong>
+        <button id="operation-collapse" type="button" aria-label="折叠操作引导">−</button>
+      </header>
+      <div id="operation-results"><p class="operation-hint">输入关键词查找操作步骤。</p></div>
+    </section>
+  </aside>
+
   <footer class="site-footer">
     <p>内容由 <code>校园网排障指南.md</code> 自动生成</p>
     <a href="#top">返回顶部 ↑</a>
   </footer>
 
   <button class="back-to-top" type="button" aria-label="返回顶部">↑</button>
+  <script type="application/json" id="operation-data">${operationDataJson}</script>
 </body>
 </html>`;
 
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(assetsDirectory, { recursive: true });
+await mkdir(operationAssetsDirectory, { recursive: true });
 await writeFile(path.join(outputDirectory, "index.html"), html);
 await writeFile(path.join(assetsDirectory, styleFileName), styleSource);
 await writeFile(path.join(assetsDirectory, scriptFileName), scriptSource);
 await cp(path.join(rootDirectory, "public"), outputDirectory, { recursive: true });
+for (const fileName of await readdir(operationContentDirectory)) {
+  if (/\.(png|jpe?g|webp|gif|svg)$/i.test(fileName)) {
+    await cp(path.join(operationContentDirectory, fileName), path.join(operationAssetsDirectory, fileName));
+  }
+}
 
 console.log(`Built dist/index.html from ${path.basename(sourcePath)}`);
 console.log(`Generated ${tableOfContents.length} table-of-contents links`);
